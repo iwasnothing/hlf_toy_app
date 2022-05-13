@@ -129,9 +129,10 @@ func (s *SmartContract) RegStudent(ctx contractapi.TransactionContextInterface) 
   if err != nil {
     return err
   }
-
+  
   return ctx.GetStub().PutPrivateData(PrivateCollection,id, studentJSON)
 }
+  
 // CreateBook issues a new book to the world state with given details.
 func (s *SmartContract) CreateBook(ctx contractapi.TransactionContextInterface, title string, author string, isbn string ) error {
   owner,err := s.GetClientName(ctx)
@@ -314,6 +315,7 @@ func (s *SmartContract) BorrowBook(ctx contractapi.TransactionContextInterface, 
   if err != nil {
     return err
   }
+  fmt.Println(PrivateCollection,student)
   studentHash,err := ctx.GetStub().GetPrivateDataHash(PrivateCollection, student)
   if err != nil {
     return err
