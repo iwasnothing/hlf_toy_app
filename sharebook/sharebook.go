@@ -3,6 +3,7 @@ package main
 import (
   "encoding/json"
   "fmt"
+  "encoding/hex"
   "strconv"
   "strings"
   "log"
@@ -47,6 +48,7 @@ type Book struct {
   IsBorrowed     bool   `json:"IsBorrowed"`
   RequestQueue   []BookRequester `json:"RequestQueue"`
   EntitleList    []string    `json:"EntitleList"`
+  ReaderList    []string    `json:"ReaderList"`
 }
 
 func (s *SmartContract) GetClientName(ctx contractapi.TransactionContextInterface) (string,error) {
@@ -96,6 +98,11 @@ func (s *SmartContract) RegStudent(ctx contractapi.TransactionContextInterface) 
   }
   fmt.Println("registering student by:")
   fmt.Println(caller)
+  tokens := strings.Split(caller, "@")
+  domain := ""
+  if len(tokens) >= 2 {
+      domain = tokens[1]
+  }
   re := regexp.MustCompile("Admin@org([0-9]).example.com")
   match := re.FindStringSubmatch(string(caller))
   fmt.Println(match)
@@ -116,7 +123,7 @@ func (s *SmartContract) RegStudent(ctx contractapi.TransactionContextInterface) 
   if err != nil {
     return err
   }
-  id := "student_" + strconv.Itoa(studentcfg.Count)
+  id := "student_" + strconv.Itoa(studentcfg.Count) + "@" + domain
   fmt.Println(id)
   student := Student{
     Org:            caller,
@@ -162,6 +169,7 @@ func (s *SmartContract) CreateBook(ctx contractapi.TransactionContextInterface, 
     IsBorrowed:     false,
     RequestQueue:   make([]BookRequester,0),
     EntitleList:    make([]string,0),
+    ReaderList:     make([]string,0),
   }
   book.EntitleList = append(book.EntitleList,owner)
   bookJSON, err := json.Marshal(book)
@@ -200,6 +208,20 @@ func (s *SmartContract) GetBook(ctx contractapi.TransactionContextInterface, id 
 
 }
 
+func (s *SmartContract) GetStudentHash(ctx contractapi.TransactionContextInterface, client string , student string) (string,error) {
+  PrivateCollection,err := s.GetPrivateCollection(ctx,client)
+  if err != nil {
+    return "",err
+  }
+  studentHash,err := ctx.GetStub().GetPrivateDataHash(PrivateCollection, student)
+  if err != nil {
+    return "",err
+  }
+  if studentHash == nil {
+    return "",fmt.Errorf("cannot find the student")
+  }
+  return hex.EncodeToString(studentHash),nil
+}
 // AddRequest  let the client to add request an existing book in the world state with provided parameters.
 func (s *SmartContract) AddRequest(ctx contractapi.TransactionContextInterface, id string , student string) error {
   exists, err := s.BookExists(ctx, id)
@@ -221,20 +243,15 @@ func (s *SmartContract) AddRequest(ctx contractapi.TransactionContextInterface, 
   if err != nil {
     return err
   }
-  PrivateCollection,err := s.GetPrivateCollection(ctx,caller)
+  studentHash,err := s.GetStudentHash(ctx,caller,student)
   if err != nil {
     return err
-  }
-  studentHash,err := ctx.GetStub().GetPrivateDataHash(PrivateCollection, student)
-  if err != nil {
-    return err
-  }
-  if studentHash == nil {
-    return fmt.Errorf("cannot find the student")
   }
   fmt.Printf("student hash: %s",studentHash) 
   for _, v := range book.EntitleList {
 	if v == caller {
+           for _, s := range book.ReaderList {
+	      if s == studentHash {
                 requester := BookRequester{caller,student}
 	        book.RequestQueue = append(book.RequestQueue,requester)
 		bookJSON, err := json.Marshal(book)
@@ -242,12 +259,14 @@ func (s *SmartContract) AddRequest(ctx contractapi.TransactionContextInterface, 
 		    return err
 		}
 		return ctx.GetStub().PutState(id, bookJSON)
+             }
+           }
 	}
   }
   return fmt.Errorf("the book %s is not entitled by you %s", id,caller)
 }
 // ReturnBook  let the client to return an existing book in the world state with provided parameters.
-func (s *SmartContract) ReturnBook(ctx contractapi.TransactionContextInterface, id string ) error {
+func (s *SmartContract) ReturnBook(ctx contractapi.TransactionContextInterface, id string , student string) error {
   exists, err := s.BookExists(ctx, id)
   if err != nil {
     return err
@@ -269,6 +288,13 @@ func (s *SmartContract) ReturnBook(ctx contractapi.TransactionContextInterface, 
   }
   if caller !=book.Holder.Org {
     return fmt.Errorf("the book %s is not borrowed by you %s", id,caller)
+  }
+  if student !=book.Holder.StudentID {
+    return fmt.Errorf("the book %s is not borrowed by you %s", id,caller)
+  }
+  _,err = s.GetStudentHash(ctx,caller,student)
+  if err != nil {
+    return err
   }
   n := len(book.RequestQueue) 
   if n > 0 {
@@ -311,21 +337,15 @@ func (s *SmartContract) BorrowBook(ctx contractapi.TransactionContextInterface, 
   if err != nil {
     return err
   }
-  PrivateCollection,err := s.GetPrivateCollection(ctx,caller)
+  studentHash,err := s.GetStudentHash(ctx,caller,student)
   if err != nil {
     return err
-  }
-  fmt.Println(PrivateCollection,student)
-  studentHash,err := ctx.GetStub().GetPrivateDataHash(PrivateCollection, student)
-  if err != nil {
-    return err
-  }
-  if studentHash == nil {
-    return fmt.Errorf("cannot find the student")
   }
   fmt.Printf("student hash: %s",studentHash) 
   for _, v := range book.EntitleList {
 	if v == caller {
+           for _, s := range book.ReaderList {
+	      if s == studentHash {
 		book.Holder = BookRequester{caller,student}
                 book.IsBorrowed = true
                 bookJSON, err := json.Marshal(book)
@@ -333,12 +353,14 @@ func (s *SmartContract) BorrowBook(ctx contractapi.TransactionContextInterface, 
 		    return err
 		}
                 return ctx.GetStub().PutState(id, bookJSON)
+              }
+           }
 	}
   }
   return fmt.Errorf("the book %s not entitled", id)
 }
 // GrantBook grant client to read an existing book in the world state with provided parameters.
-func (s *SmartContract) GrantBook(ctx contractapi.TransactionContextInterface, id string, client string) error {
+func (s *SmartContract) GrantBook(ctx contractapi.TransactionContextInterface, id string, client string, student string) error {
   exists, err := s.BookExists(ctx, id)
   if err != nil {
     return err
@@ -359,6 +381,13 @@ func (s *SmartContract) GrantBook(ctx contractapi.TransactionContextInterface, i
     return fmt.Errorf("the book %s is not owned by you", id)
   }
   book.EntitleList = append(book.EntitleList,client)
+
+  studentHash,err := s.GetStudentHash(ctx,client,student)
+  if err != nil {
+    return err
+  }
+  fmt.Printf("student hash: %s",studentHash) 
+  book.ReaderList = append(book.ReaderList,studentHash)
   
   bookJSON, err := json.Marshal(book)
   if err != nil {
@@ -461,6 +490,7 @@ func (s *SmartContract) GetAllBooks(ctx contractapi.TransactionContextInterface)
        for _, v := range book.EntitleList {
 	   if v == caller {
  	   	books = append(books, &book)
+                break;
            }
 
         }
